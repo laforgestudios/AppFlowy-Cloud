@@ -2874,25 +2874,14 @@ async fn collab_full_sync_handler(
     AppError::InvalidRequest(format!("Failed to parse PayloadCompressionType: {}", err))
   })?;
 
-  let doc_state = match compression_type {
-    PayloadCompressionType::None => params.doc_state,
-    PayloadCompressionType::Zstd => tokio::task::spawn_blocking(move || {
-      zstd::decode_all(&*params.doc_state)
-        .map_err(|err| AppError::InvalidRequest(format!("Failed to decompress doc_state: {}", err)))
-    })
-    .await
-    .map_err(AppError::from)??,
-  };
-
-  let sv = match compression_type {
-    PayloadCompressionType::None => params.sv,
-    PayloadCompressionType::Zstd => tokio::task::spawn_blocking(move || {
-      zstd::decode_all(&*params.sv)
-        .map_err(|err| AppError::InvalidRequest(format!("Failed to decompress sv: {}", err)))
-    })
-    .await
-    .map_err(AppError::from)??,
-  };
+  let (doc_state, sv) = tokio::task::spawn_blocking(move || {
+    Ok::<_, AppError>((
+      biz::laforge_atomic::full_sync::decompress(compression_type, params.doc_state)?,
+      biz::laforge_atomic::full_sync::decompress(compression_type, params.sv)?,
+    ))
+  })
+  .await
+  .map_err(AppError::from)??;
 
   let app_version = client_version_from_headers(req.headers())
     .map(|s| s.to_string())

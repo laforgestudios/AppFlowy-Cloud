@@ -5,6 +5,16 @@ package collab_proto;
 enum PayloadCompressionType {
     NONE = 0;
     ZSTD = 1;
+    GZIP = 2;
+}
+
+/**
+ * Redis stream message id of an update: UNIX epoch timestamp in milliseconds plus a
+ * sequence number for updates sharing the same timestamp.
+ */
+message Rid {
+    fixed64 timestamp = 1;
+    uint32 counter = 2;
 }
 
 message CollabDocStateParams {
@@ -13,4 +23,32 @@ message CollabDocStateParams {
     PayloadCompressionType compression = 3;
     bytes sv = 4;
     bytes doc_state = 5;
+    string collab_version = 6;
+    optional string database_restore_id = 7;
+}
+
+/**
+ * Request to sync multiple collab documents in a batch. An item with an empty `doc_state`
+ * is a read probe: it only returns the server state missing from `sv`.
+ */
+message CollabBatchSyncRequest {
+    repeated CollabDocStateParams items = 1;
+    PayloadCompressionType response_compression = 2;
+}
+
+message CollabBatchSyncResult {
+    string object_id = 1;
+    int32 collab_type = 2;
+    PayloadCompressionType compression = 3;
+    bytes missing_update = 4;
+    string error = 5;
+    bytes server_state_vector = 6;
+    string collab_version = 7;
+    // Set when a non-empty client update of this item was accepted by the update stream.
+    Rid message_id = 8;
+}
+
+message CollabBatchSyncResponse {
+    repeated CollabBatchSyncResult results = 1;
+    PayloadCompressionType response_compression = 2;
 }

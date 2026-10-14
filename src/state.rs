@@ -16,7 +16,7 @@ use app_error::AppError;
 use appflowy_ai_client::client::AppFlowyAIClient;
 use appflowy_collaborate::collab::cache::CollabCache;
 use appflowy_collaborate::metrics::CollabMetrics;
-use appflowy_collaborate::ws2::WsServer;
+use appflowy_collaborate::ws2::{CollabManager, WsServer};
 use appflowy_collaborate::CollabRealtimeMetrics;
 use collab_stream::awareness_gossip::AwarenessGossip;
 use collab_stream::metrics::CollabStreamMetrics;
@@ -61,6 +61,7 @@ pub struct AppState {
   pub ai_client: AppFlowyAIClient,
   pub indexer_scheduler: Arc<IndexerScheduler>,
   pub ws_server: Addr<WsServer>,
+  pub collab_manager: Arc<CollabManager>,
 }
 
 impl AppState {

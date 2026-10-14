@@ -3,6 +3,7 @@ pub mod authentication;
 pub mod chat;
 pub mod collab;
 pub mod data_import;
+pub mod laforge_atomic;
 pub mod notification;
 pub mod pg_listener;
 pub mod search;
