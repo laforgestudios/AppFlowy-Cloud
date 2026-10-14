@@ -8,9 +8,9 @@
 //! - [collab]: presence check and insertion of client-id collabs, readability check.
 //!
 //! The creation kinds built on top: [document] (default document page), [database_page]
-//! (default database page, every layout) and [row_document]. [database_schema] holds the default
-//! fields and per-layout view settings, [database_collab] the database reads and
-//! WorkspaceDatabase registration.
+//! (default database page, every layout), [database_view] (a view added to a database) and
+//! [row_document]. [database_schema] holds the default fields and per-layout view settings,
+//! [database_collab] the database reads and WorkspaceDatabase registration they share.
 //! [full_sync] is the batch full-sync used by the web to hydrate created objects.
 //!
 //! Ordering rule for every kind: collabs are committed first, then the Folder update is
@@ -23,6 +23,7 @@ pub mod collab;
 pub mod database_collab;
 pub mod database_page;
 pub mod database_schema;
+pub mod database_view;
 pub mod document;
 pub mod folder;
 pub mod full_sync;

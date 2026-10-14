@@ -6,6 +6,7 @@
 use crate::api::util::realtime_user_for_web_request;
 use crate::biz::authentication::jwt::UserUuid;
 use crate::biz::laforge_atomic::database_page::create_default_database_page;
+use crate::biz::laforge_atomic::database_view::create_default_database_view;
 use crate::biz::laforge_atomic::document::create_default_document_page;
 use crate::biz::laforge_atomic::full_sync::collab_full_sync_batch;
 use crate::biz::laforge_atomic::row_document::create_row_document;
@@ -40,6 +41,11 @@ pub fn laforge_atomic_routes(cfg: &mut web::ServiceConfig) {
       web::resource("/api/workspace/{workspace_id}/v2/page-view/database/default")
         .app_data(PayloadConfig::new(ATOMIC_CREATION_MAX_BODY))
         .route(web::post().to(create_default_database_handler)),
+    )
+    .service(
+      web::resource("/api/workspace/{workspace_id}/v2/page-view/database-view/default")
+        .app_data(PayloadConfig::new(ATOMIC_CREATION_MAX_BODY))
+        .route(web::post().to(create_default_database_view_handler)),
     )
     .service(
       web::resource("/api/workspace/{workspace_id}/v2/page-view/row-document")
@@ -96,6 +102,19 @@ async fn create_default_database_handler(
   let uid = state.user_cache.get_user_uid(&user_uuid).await?;
   let user = realtime_user_for_web_request(req.headers(), uid)?;
   let receipt = create_default_database_page(&state, user, path.into_inner(), &body).await?;
+  Ok(Json(AppResponse::Ok().with_data(receipt)))
+}
+
+async fn create_default_database_view_handler(
+  user_uuid: UserUuid,
+  path: web::Path<Uuid>,
+  body: Bytes,
+  state: Data<AppState>,
+  req: HttpRequest,
+) -> Result<Json<AppResponse<serde_json::Value>>> {
+  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
+  let user = realtime_user_for_web_request(req.headers(), uid)?;
+  let receipt = create_default_database_view(&state, user, path.into_inner(), &body).await?;
   Ok(Json(AppResponse::Ok().with_data(receipt)))
 }
 
