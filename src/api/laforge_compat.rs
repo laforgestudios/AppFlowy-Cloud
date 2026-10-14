@@ -125,12 +125,28 @@ impl AuthProvidersPayload {
   }
 }
 
+/// Magic link needs working SMTP, so it is opt-in: `APPFLOWY_ENABLE_MAGIC_LINK=true|1`.
+fn magic_link_enabled_from_env() -> bool {
+  magic_link_flag(std::env::var("APPFLOWY_ENABLE_MAGIC_LINK").ok().as_deref())
+}
+
+fn magic_link_flag(value: Option<&str>) -> bool {
+  matches!(
+    value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+    Some("true") | Some("1")
+  )
+}
+
 fn auth_providers_from_settings(
   oauth_providers: Vec<String>,
   signup_disabled: bool,
   mailer_autoconfirm: bool,
+  magic_link: bool,
 ) -> AuthProvidersPayload {
-  let mut providers = vec!["password".to_string(), "magic_link".to_string()];
+  let mut providers = vec!["password".to_string()];
+  if magic_link {
+    providers.push("magic_link".to_string());
+  }
   providers.extend(oauth_providers);
   AuthProvidersPayload {
     count: providers.len(),
@@ -151,6 +167,7 @@ async fn auth_providers_handler(state: Data<AppState>) -> Json<AppResponse<AuthP
         .collect(),
       settings.disable_signup,
       settings.mailer_autoconfirm,
+      magic_link_enabled_from_env(),
     ),
     Err(err) => {
       tracing::warn!("auth-providers: GoTrue settings unavailable, falling back: {}", err);
@@ -302,7 +319,7 @@ struct ViewsResponse {
   views: Vec<FolderView>,
 }
 
-async fn require_member(state: &AppState, uid: i64, workspace_id: Uuid) -> Result<(), AppError> {
+pub(crate) async fn require_member(state: &AppState, uid: i64, workspace_id: Uuid) -> Result<(), AppError> {
   // AppFlowy Web does not support guest editors, so require at least a member.
   state
     .workspace_access_control
@@ -741,12 +758,25 @@ mod tests {
 
   #[test]
   fn auth_providers_shape() {
-    let p = auth_providers_from_settings(vec!["google".into()], true, false);
+    let p = auth_providers_from_settings(vec!["google".into()], true, false, true);
     let v = serde_json::to_value(&p).unwrap();
     assert_eq!(v["count"], 3);
     assert_eq!(v["providers"], json!(["password", "magic_link", "google"]));
     assert_eq!(v["signup_disabled"], true);
     assert_eq!(v["mailer_autoconfirm"], false);
+  }
+
+  #[test]
+  fn magic_link_is_opt_in() {
+    let off = auth_providers_from_settings(vec!["google".into()], false, false, false);
+    assert_eq!(off.providers, vec!["password", "google"]);
+    assert_eq!(off.count, 2);
+    assert!(!magic_link_flag(None));
+    assert!(!magic_link_flag(Some("false")));
+    assert!(!magic_link_flag(Some("")));
+    assert!(magic_link_flag(Some("true")));
+    assert!(magic_link_flag(Some(" TRUE ")));
+    assert!(magic_link_flag(Some("1")));
   }
 
   #[test]

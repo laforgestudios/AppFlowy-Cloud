@@ -8,6 +8,7 @@ pub mod invite_code;
 pub mod laforge_atomic;
 pub mod laforge_publish;
 pub mod laforge_compat;
+pub mod laforge_stubs;
 pub mod metrics;
 pub mod search;
 pub mod server_info;

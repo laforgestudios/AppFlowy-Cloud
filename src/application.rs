@@ -158,6 +158,7 @@ pub async fn run_actix_server(
       .service(user_scope())
       // Literal Laforge routes, matched before the generic workspace patterns.
       .configure(laforge_atomic_routes)
+      .configure(crate::api::laforge_stubs::laforge_stub_routes)
       // Before workspace_scope(): a literal path under /api/workspace.
       .service(published_snapshot_resource())
       .service(workspace_scope())
