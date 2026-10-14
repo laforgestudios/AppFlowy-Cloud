@@ -59,6 +59,7 @@ use crate::api::file_storage::file_storage_scope;
 use crate::api::guest::sharing_scope;
 use crate::api::invite_code::invite_code_scope;
 use crate::api::laforge_atomic::laforge_atomic_routes;
+use crate::api::laforge_publish::published_snapshot_resource;
 use crate::api::metrics::metrics_scope;
 use crate::api::search::search_scope;
 use crate::api::server_info::server_info_scope;
@@ -156,6 +157,8 @@ pub async fn run_actix_server(
       .service(user_scope())
       // Literal Laforge routes, matched before the generic workspace patterns.
       .configure(laforge_atomic_routes)
+      // Before workspace_scope(): a literal path under /api/workspace.
+      .service(published_snapshot_resource())
       .service(workspace_scope())
       .service(invite_code_scope())
       .service(collab_scope())

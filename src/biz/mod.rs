@@ -6,6 +6,7 @@ pub mod data_import;
 pub mod laforge_atomic;
 pub mod notification;
 pub mod pg_listener;
+pub mod publish_snapshot;
 pub mod search;
 pub mod template;
 pub mod user;
