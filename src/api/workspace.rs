@@ -99,7 +99,8 @@ pub const WORKSPACE_PUBLISH_NAMESPACE_PATTERN: &str =
   "/api/workspace/{workspace_id}/publish-namespace";
 
 pub fn workspace_scope() -> Scope {
-  web::scope("/api/workspace")
+  // Laforge compat routes first (literal-before-generic ordering).
+  crate::api::laforge_compat::read_routes(web::scope("/api/workspace"))
     .service(
       web::resource("")
         .route(web::get().to(list_workspace_handler))
@@ -383,7 +384,8 @@ pub fn workspace_scope() -> Scope {
       // Web browser can't carry payload when using GET method, so for browser compatibility, we use POST method
       .route(web::post().to(batch_get_collab_handler)),
     )
-    .service(web::resource("/{workspace_id}/database").route(web::get().to(list_database_handler)))
+    .service(web::resource("/{workspace_id}/database")
+        .route(web::get().to(crate::api::laforge_compat::list_database_dispatch_handler)))
     .service(
       web::resource("/{workspace_id}/database/{database_id}/row")
         .route(web::get().to(list_database_row_id_handler))
@@ -1356,7 +1358,7 @@ async fn post_web_update_handler(
 }
 
 #[instrument(level = "debug", skip_all)]
-async fn get_row_document_collab_exists_handler(
+pub(crate) async fn get_row_document_collab_exists_handler(
   user_uuid: UserUuid,
   path: web::Path<(Uuid, Uuid)>,
   state: Data<AppState>,
@@ -2556,24 +2558,6 @@ async fn get_workspace_publish_outline_handler(
   )
   .await?;
   Ok(Json(AppResponse::Ok().with_data(published_view)))
-}
-
-async fn list_database_handler(
-  user_uuid: UserUuid,
-  workspace_id: web::Path<Uuid>,
-  state: Data<AppState>,
-) -> Result<Json<AppResponse<Vec<AFDatabase>>>> {
-  let uid = state.user_cache.get_user_uid(&user_uuid).await?;
-  let workspace_id = workspace_id.into_inner();
-  let dbs = biz::collab::ops::list_database(
-    &state.pg_pool,
-    &state.ws_server,
-    &state.collab_storage,
-    uid,
-    workspace_id,
-  )
-  .await?;
-  Ok(Json(AppResponse::Ok().with_data(dbs)))
 }
 
 async fn list_database_row_id_handler(

@@ -152,6 +152,7 @@ pub async fn run_actix_server(
 
     app
       .service(server_info_scope())
+      .service(crate::api::laforge_compat::server_info_scope())
       .service(user_scope())
       .service(workspace_scope())
       .service(invite_code_scope())
@@ -584,6 +585,10 @@ fn actix_cors_scope() -> actix_cors::Cors {
       "Client-Version",
       "Device-Id",
       "X-Request-Id",
+      "X-Platform",
+      "Cache-Control",
+      "X-AppFlowy-Sync-Lane",
     ])
+    .expose_headers(vec!["ETag", "Retry-After", "X-Request-Id"])
     .max_age(3600)
 }
