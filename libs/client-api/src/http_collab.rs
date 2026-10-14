@@ -530,6 +530,7 @@ impl Client {
       compression: PayloadCompressionType::Zstd as i32,
       sv,
       doc_state,
+      ..Default::default()
     };
 
     let mut encoded_payload = Vec::new();

@@ -58,6 +58,7 @@ use crate::api::data_import::data_import_scope;
 use crate::api::file_storage::file_storage_scope;
 use crate::api::guest::sharing_scope;
 use crate::api::invite_code::invite_code_scope;
+use crate::api::laforge_atomic::laforge_atomic_routes;
 use crate::api::metrics::metrics_scope;
 use crate::api::search::search_scope;
 use crate::api::server_info::server_info_scope;
@@ -153,6 +154,8 @@ pub async fn run_actix_server(
     app
       .service(server_info_scope())
       .service(user_scope())
+      // Literal Laforge routes, matched before the generic workspace patterns.
+      .configure(laforge_atomic_routes)
       .service(workspace_scope())
       .service(invite_code_scope())
       .service(collab_scope())
@@ -366,7 +369,7 @@ pub async fn init_state(config: &Config) -> Result<AppState, Error> {
     awareness_gossip.clone(),
     indexer_scheduler.clone(),
   );
-  let ws_server = WsServer::new(manager).start();
+  let ws_server = WsServer::new(manager.clone()).start();
 
   info!("Application state initialized");
   Ok(AppState {
@@ -393,6 +396,7 @@ pub async fn init_state(config: &Config) -> Result<AppState, Error> {
     ai_client: appflowy_ai_client,
     indexer_scheduler,
     ws_server,
+    collab_manager: manager,
   })
 }
 
