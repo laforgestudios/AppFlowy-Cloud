@@ -206,7 +206,49 @@ fn to_folder_view(
     last_edited_time: DateTime::from_timestamp(view.last_edited_time, 0).unwrap_or_default(),
     is_locked: view.is_locked,
     extra,
+    has_children: has_visible_children(
+      workspace_id,
+      view_id,
+      &view,
+      folder,
+      private_space_and_trash_views,
+      uid,
+    ),
     children,
+  })
+}
+
+/// Whether the view has at least one child that `to_folder_view` would keep, regardless of depth.
+fn has_visible_children(
+  workspace_id: Uuid,
+  view_id: &Uuid,
+  view: &View,
+  folder: &Folder,
+  private_space_and_trash_views: &PrivateSpaceAndTrashViews,
+  uid: i64,
+) -> bool {
+  let parent_is_workspace = &workspace_id == view_id;
+  view.children.iter().any(|child| {
+    let child_id = match Uuid::parse_str(&child.id) {
+      Ok(id) => id,
+      Err(_) => return false,
+    };
+    if private_space_and_trash_views
+      .view_ids_in_trash
+      .contains(&child_id)
+      || private_space_and_trash_views
+        .other_private_space_ids
+        .contains(&child_id)
+    {
+      return false;
+    }
+    match folder.get_view(&child.id, uid) {
+      Some(child_view) => {
+        child_view.parent_view_id == view.id
+          && (!parent_is_workspace || check_if_view_is_space(&child_view))
+      },
+      None => false,
+    }
   })
 }
 
@@ -248,6 +290,7 @@ pub fn section_items_to_favorite_folder_view(
           is_locked: v.is_locked,
           extra,
           children: vec![],
+          has_children: false,
         };
         FavoriteFolderView {
           view: folder_view,
@@ -289,6 +332,7 @@ pub fn section_items_to_recent_folder_view(
           is_locked: v.is_locked,
           extra: v.extra.as_ref().map(|e| parse_extra_field_as_json(e)),
           children: vec![],
+          has_children: false,
         };
         RecentFolderView {
           view: folder_view,
@@ -328,6 +372,7 @@ pub fn section_items_to_trash_folder_view(
           is_locked: v.is_locked,
           extra: v.extra.as_ref().map(|e| parse_extra_field_as_json(e)),
           children: vec![],
+          has_children: false,
         };
         TrashFolderView {
           view: folder_view,
@@ -542,5 +587,156 @@ pub fn to_space_permission(space_permission: &workspace_dto::SpacePermission) ->
   match space_permission {
     workspace_dto::SpacePermission::PublicToAll => SpacePermission::PublicToAll,
     workspace_dto::SpacePermission::Private => SpacePermission::Private,
+  }
+}
+
+// ---- Laforge: view-tree helpers (navigation, depth clamping) ----
+
+pub const MAX_VIEW_TREE_DEPTH: u32 = 10;
+
+/// Clamp a client supplied depth to the range the folder tree builder accepts.
+pub fn clamp_view_depth(depth: Option<u32>, default: u32) -> u32 {
+  depth.unwrap_or(default).min(MAX_VIEW_TREE_DEPTH)
+}
+
+/// Ids from the top-level space down to `view_id` (inclusive).
+/// Returns `None` when the view does not exist or is the workspace root itself.
+pub fn navigation_path_ids(
+  folder: &Folder,
+  workspace_id: Uuid,
+  view_id: &Uuid,
+  uid: i64,
+) -> Option<Vec<Uuid>> {
+  if &workspace_id == view_id {
+    return None;
+  }
+  let chain = get_self_and_ancestor_views(folder, &view_id.to_string(), uid).ok()?;
+  if chain.is_empty() {
+    return None;
+  }
+  let mut path = Vec::new();
+  for view in chain {
+    let id = Uuid::parse_str(&view.id).ok()?;
+    if id == workspace_id {
+      break;
+    }
+    path.push(id);
+    if Uuid::parse_str(&view.parent_view_id).ok() == Some(workspace_id) {
+      break;
+    }
+  }
+  path.reverse();
+  if path.is_empty() {
+    None
+  } else {
+    Some(path)
+  }
+}
+
+fn truncate_children_below(node: &mut FolderView, remaining: u32) {
+  if remaining == 0 {
+    node.children.clear();
+    return;
+  }
+  for child in node.children.iter_mut() {
+    truncate_children_below(child, remaining - 1);
+  }
+}
+
+/// Shape a full subtree into a navigation tree: every ancestor on `path` keeps all its
+/// children, siblings off the path are collapsed (`has_children` preserved) and the target
+/// (last id of `path`) is expanded `target_depth` levels.
+pub fn prune_navigation_tree(node: &mut FolderView, path: &[Uuid], target_depth: u32) {
+  match path {
+    [] => {},
+    [last] if *last == node.view_id => truncate_children_below(node, target_depth),
+    [first, rest @ ..] if *first == node.view_id => {
+      let next = rest[0];
+      for child in node.children.iter_mut() {
+        if child.view_id == next {
+          prune_navigation_tree(child, rest, target_depth);
+        } else {
+          child.children.clear();
+        }
+      }
+    },
+    _ => {},
+  }
+}
+
+#[cfg(test)]
+mod laforge_tests {
+  use super::*;
+
+  fn node(id: u128, children: Vec<FolderView>) -> FolderView {
+    FolderView {
+      view_id: Uuid::from_u128(id),
+      has_children: !children.is_empty(),
+      children,
+      ..Default::default()
+    }
+  }
+
+  fn ids(v: &[FolderView]) -> Vec<u128> {
+    v.iter().map(|c| c.view_id.as_u128()).collect()
+  }
+
+  // space(1) -> [a(2) -> [t(4) -> [x(6) -> [y(7)]]], b(3) -> [c(5)]]
+  fn tree() -> FolderView {
+    node(
+      1,
+      vec![
+        node(2, vec![node(4, vec![node(6, vec![node(7, vec![])])])]),
+        node(3, vec![node(5, vec![])]),
+      ],
+    )
+  }
+
+  #[test]
+  fn clamp_depth() {
+    assert_eq!(clamp_view_depth(None, 1), 1);
+    assert_eq!(clamp_view_depth(Some(3), 1), 3);
+    assert_eq!(clamp_view_depth(Some(99), 1), MAX_VIEW_TREE_DEPTH);
+  }
+
+  #[test]
+  fn prune_collapses_siblings_and_expands_target() {
+    let mut t = tree();
+    let path: Vec<Uuid> = [1, 2, 4].map(Uuid::from_u128).to_vec();
+    prune_navigation_tree(&mut t, &path, 1);
+    assert_eq!(ids(&t.children), vec![2, 3]);
+    // sibling off the path is collapsed but still advertises children
+    assert!(t.children[1].children.is_empty() && t.children[1].has_children);
+    let target = &t.children[0].children[0];
+    assert_eq!(target.view_id.as_u128(), 4);
+    assert_eq!(ids(&target.children), vec![6]);
+    assert!(target.children[0].children.is_empty() && target.children[0].has_children);
+  }
+
+  #[test]
+  fn prune_target_depth_zero() {
+    let mut t = tree();
+    let path: Vec<Uuid> = [1, 2, 4].map(Uuid::from_u128).to_vec();
+    prune_navigation_tree(&mut t, &path, 0);
+    let target = &t.children[0].children[0];
+    assert!(target.children.is_empty() && target.has_children);
+  }
+
+  #[test]
+  fn prune_target_is_space() {
+    let mut t = tree();
+    prune_navigation_tree(&mut t, &[Uuid::from_u128(1)], 0);
+    assert!(t.children.is_empty());
+  }
+
+  #[test]
+  fn has_children_serializes_and_defaults() {
+    let v = serde_json::to_value(node(1, vec![node(2, vec![])])).unwrap();
+    assert_eq!(v["has_children"], true);
+    assert!(v["children"].is_array());
+    let mut raw = v.clone();
+    raw.as_object_mut().unwrap().remove("has_children");
+    let back: FolderView = serde_json::from_value(raw).unwrap();
+    assert!(!back.has_children);
   }
 }

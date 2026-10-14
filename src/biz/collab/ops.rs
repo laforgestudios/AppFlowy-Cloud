@@ -248,6 +248,27 @@ async fn fix_old_workspace_folder(
   Ok(folder)
 }
 
+/// Load the (patched) workspace folder together with the published view ids, uncached.
+pub async fn load_folder_and_published_ids(
+  state: &AppState,
+  user: RealtimeUser,
+  workspace_id: Uuid,
+) -> Result<(Folder, HashSet<Uuid>), AppError> {
+  let appflowy_web_metrics = &state.metrics.appflowy_web_metrics;
+  let folder = state.ws_server.get_folder(workspace_id).await?;
+  let patched_folder = fix_old_workspace_folder(
+    appflowy_web_metrics,
+    &state.ws_server,
+    user,
+    folder,
+    workspace_id,
+  )
+  .await?;
+  let publish_view_ids =
+    select_published_view_ids_for_workspace(&state.pg_pool, workspace_id).await?;
+  Ok((patched_folder, publish_view_ids.into_iter().collect()))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn get_user_workspace_structure(
   state: &AppState,
@@ -256,7 +277,6 @@ pub async fn get_user_workspace_structure(
   depth: u32,
   root_view_id: &Uuid,
 ) -> Result<FolderView, AppError> {
-  let appflowy_web_metrics = &state.metrics.appflowy_web_metrics;
   let depth_limit = 10;
   if depth > depth_limit {
     return Err(AppError::InvalidRequest(format!(
@@ -264,26 +284,16 @@ pub async fn get_user_workspace_structure(
       depth, depth_limit
     )));
   }
-  let folder = state.ws_server.get_folder(workspace_id).await?;
-  let patched_folder = fix_old_workspace_folder(
-    appflowy_web_metrics,
-    &state.ws_server,
-    user.clone(),
-    folder,
-    workspace_id,
-  )
-  .await?;
-
-  let publish_view_ids =
-    select_published_view_ids_for_workspace(&state.pg_pool, workspace_id).await?;
-  let publish_view_ids: HashSet<_> = publish_view_ids.into_iter().collect();
+  let uid = user.uid;
+  let (patched_folder, publish_view_ids) =
+    load_folder_and_published_ids(state, user, workspace_id).await?;
   collab_folder_to_folder_view(
     workspace_id,
     root_view_id,
     &patched_folder,
     depth,
     &publish_view_ids,
-    user.uid,
+    uid,
   )
 }
 

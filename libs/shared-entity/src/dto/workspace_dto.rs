@@ -274,6 +274,11 @@ pub struct CreatePageDatabaseViewParams {
 pub struct PageCollabData {
   pub encoded_collab: Vec<u8>,
   pub row_data: HashMap<Uuid, Vec<u8>>,
+  /// The web client reads the owner/last editor from `data`; mirrored from `PageCollab`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub owner: Option<AFWebUser>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub last_editor: Option<AFWebUser>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +352,9 @@ pub struct FolderView {
   /// contains fields like `is_space`, and font information
   pub extra: Option<serde_json::Value>,
   pub children: Vec<FolderView>,
+  /// True when the view has visible children, even if `children` was truncated by the requested depth.
+  #[serde(default)]
+  pub has_children: bool,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
