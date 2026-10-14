@@ -1,0 +1,54 @@
+# Laforge local stack: the open-source server built from THIS fork, for the
+# web app run separately (laforgestudios/AppFlowy-Web, `pnpm dev`).
+#
+#   cp deploy.env .env   # then set the overrides listed in doc/LAFORGE.md
+#   docker compose -f docker-compose.yml -f docker-compose.laforge.yml up -d --build
+#
+# The closed-source images (AI, search, admin frontend, prebuilt web) are
+# switched off; appflowy_cloud and appflowy_worker are compiled from source.
+services:
+  appflowy_cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: laforge/appflowy_cloud:local
+    ports:
+      - "8000:8000"
+    environment:
+      - AI_ENABLED=false
+
+  appflowy_worker:
+    build:
+      context: .
+      dockerfile: services/appflowy-worker/Dockerfile
+    image: laforge/appflowy_worker:local
+
+  gotrue:
+    ports:
+      - "9999:9999"
+
+  postgres:
+    ports:
+      - "5433:5432"
+
+  redis:
+    ports:
+      - "6380:6379"
+
+  minio:
+    # minio/minio is no longer published on Docker Hub; pgsty/minio is a
+    # maintained drop-in build of the same server.
+    image: pgsty/minio:latest
+    ports:
+      - "9000:9000"
+
+  nginx:
+    profiles: ["disabled"]
+  admin_frontend:
+    profiles: ["disabled"]
+  ai:
+    profiles: ["disabled"]
+  appflowy_search:
+    profiles: ["disabled"]
+  appflowy_web:
+    profiles: ["disabled"]
