@@ -2058,7 +2058,7 @@ async fn get_page_view_collab_for_orphaned_view(
   uid: i64,
   workspace_id: &Uuid,
 ) -> Result<PageCollab, AppError> {
-  let data = get_page_collab_data_for_document(collab_storage, uid, workspace_id, view_id)
+  let mut data = get_page_collab_data_for_document(collab_storage, uid, workspace_id, view_id)
     .await
     .map_err(|err| {
       AppError::InvalidFolderView(format!(
@@ -2072,6 +2072,7 @@ async fn get_page_view_collab_for_orphaned_view(
       "unable to find collab metadata"
     )))?;
   let owner = select_web_user_from_uid(pg_pool, metadata.owner_uid).await?;
+  data.owner = owner.clone();
 
   Ok(PageCollab {
     view: FolderView {
@@ -2092,6 +2093,7 @@ async fn get_page_view_collab_for_orphaned_view(
       is_locked: Some(false),
       extra: None,
       children: vec![],
+      has_children: false,
     },
     data,
     owner: owner.clone(),
@@ -2148,7 +2150,9 @@ async fn get_page_view_collab_for_view_with_parent(
     is_locked: view.is_locked,
     extra: view.extra.as_ref().map(|e| parse_extra_field_as_json(e)),
     children: vec![],
+    has_children: !view.children.is_empty(),
   };
+  let extra_database_id = database_id_from_view_extra(view.extra.as_deref());
   let page_collab_data = match view.layout {
     collab_folder::ViewLayout::Document => {
       get_page_collab_data_for_document(collab_storage, uid, workspace_id, view_id).await
@@ -2162,13 +2166,24 @@ async fn get_page_view_collab_for_view_with_parent(
     | collab_folder::ViewLayout::Feed
     | collab_folder::ViewLayout::Form
     | collab_folder::ViewLayout::Timeline => {
-      get_page_collab_data_for_database(pg_pool, collab_storage, uid, workspace_id, view_id).await
+      get_page_collab_data_for_database(
+        pg_pool,
+        collab_storage,
+        uid,
+        workspace_id,
+        view_id,
+        extra_database_id.as_deref(),
+      )
+      .await
     },
     collab_folder::ViewLayout::Chat => Err(AppError::InvalidRequest(
       "Page view for AI chat is not supported at the moment".to_string(),
     )),
   }?;
 
+  let mut page_collab_data = page_collab_data;
+  page_collab_data.owner = owner.clone();
+  page_collab_data.last_editor = last_editor.clone();
   let page_collab = PageCollab {
     view: folder_view,
     data: page_collab_data,
@@ -2185,6 +2200,7 @@ async fn get_page_collab_data_for_database(
   uid: i64,
   workspace_id: &Uuid,
   view_id: &Uuid,
+  extra_database_id: Option<&str>,
 ) -> Result<PageCollabData, AppError> {
   let client_id = default_client_id();
   let ws_db_oid = select_workspace_database_oid(pg_pool, workspace_id)
@@ -2208,14 +2224,19 @@ async fn get_page_collab_data_for_database(
   let ws_db_body = WorkspaceDatabase::open(ws_db_collab).map_err(|err| {
     AppError::Internal(anyhow!("Failed to open workspace database body: {}", err))
   })?;
-  let db_oid = {
-    ws_db_body
-      .get_database_meta_with_view_id(&view_id.to_string())
-      .ok_or(AppError::NoRequiredData(format!(
-        "Database view {} not found",
-        view_id
-      )))?
-      .database_id
+  // Container views of the new web client carry the database id in `extra.database_id`;
+  // fall back to the workspace database lookup by view id.
+  let db_oid = match extra_database_id {
+    Some(database_id) => database_id.to_string(),
+    None => {
+      ws_db_body
+        .get_database_meta_with_view_id(&view_id.to_string())
+        .ok_or(AppError::NoRequiredData(format!(
+          "Database view {} not found",
+          view_id
+        )))?
+        .database_id
+    },
   };
   let db = collab_storage
     .get_full_encode_collab(
@@ -2296,6 +2317,8 @@ async fn get_page_collab_data_for_database(
   })?;
 
   Ok(PageCollabData {
+    owner: None,
+    last_editor: None,
     encoded_collab: db.doc_state.to_vec(),
     row_data,
   })
@@ -2318,6 +2341,8 @@ async fn get_page_collab_data_for_document(
     .map(|v| v.encoded_collab)?;
 
   Ok(PageCollabData {
+    owner: None,
+    last_editor: None,
     encoded_collab: collab.doc_state.clone().to_vec(),
     row_data: HashMap::default(),
   })
@@ -2783,5 +2808,28 @@ mod tests {
       }
     );
     assert_eq!(target(&legacy_id), PublishedDatabaseTarget::default());
+  }
+}
+
+/// `extra.database_id` of a folder view (set on database container views), if it is a valid uuid.
+pub fn database_id_from_view_extra(extra: Option<&str>) -> Option<String> {
+  let value: serde_json::Value = serde_json::from_str(extra?).ok()?;
+  let id = value.get("database_id")?.as_str()?;
+  Uuid::parse_str(id).ok().map(|id| id.to_string())
+}
+
+#[cfg(test)]
+mod laforge_page_view_tests {
+  use super::*;
+
+  #[test]
+  fn database_id_from_extra() {
+    let id = "7f0f3c3e-3f3c-4c2a-9d0e-2d2f7a0b1c11";
+    let extra = format!(r#"{{"is_database_container":true,"database_id":"{id}"}}"#);
+    assert_eq!(database_id_from_view_extra(Some(&extra)).as_deref(), Some(id));
+    assert_eq!(database_id_from_view_extra(Some(r#"{"database_id":"nope"}"#)), None);
+    assert_eq!(database_id_from_view_extra(Some("{}")), None);
+    assert_eq!(database_id_from_view_extra(Some("not json")), None);
+    assert_eq!(database_id_from_view_extra(None), None);
   }
 }
