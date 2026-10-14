@@ -6,8 +6,8 @@ use crate::biz::collab::database::{
 };
 use crate::biz::collab::folder_view::{
   check_if_space_is_private, check_if_view_is_space, get_prev_view_id,
-  get_space_view_for_current_view, parse_extra_field_as_json, to_dto_view_icon, to_dto_view_layout,
-  to_folder_view_icon, to_folder_view_layout, to_space_permission,
+  get_space_view_for_current_view, parse_extra_field_as_json, to_database_layout, to_dto_view_icon,
+  to_dto_view_layout, to_folder_view_icon, to_folder_view_layout, to_space_permission,
 };
 use crate::biz::collab::ops::get_latest_workspace_database;
 use crate::biz::collab::utils::{
@@ -36,7 +36,7 @@ use collab_database::rows::{new_cell_builder, CreateRowParams};
 use collab_database::template::entity::CELL_DATA;
 use collab_database::views::{
   BoardLayoutSetting, CalendarLayoutSetting, DatabaseLayout, Group, GroupSetting, GroupSettingMap,
-  LayoutSetting, LayoutSettings,
+  LayoutSetting, LayoutSettings, TimelineLayoutSetting,
 };
 use collab_database::workspace_database::WorkspaceDatabase;
 use collab_database::{database::DatabaseBody, rows::RowId};
@@ -265,6 +265,22 @@ pub async fn create_page(
     },
     ViewLayout::Board => create_board_page(state, user, workspace_id, parent_view_id, name).await,
     ViewLayout::Chat => create_chat_page(state, user, workspace_id, parent_view_id, name).await,
+    ViewLayout::Chart
+    | ViewLayout::List
+    | ViewLayout::Gallery
+    | ViewLayout::Feed
+    | ViewLayout::Form
+    | ViewLayout::Timeline => {
+      create_database_layout_page(
+        state,
+        user,
+        workspace_id,
+        parent_view_id,
+        to_folder_view_layout(view_layout.clone()),
+        name,
+      )
+      .await
+    },
   }
 }
 
@@ -415,6 +431,60 @@ async fn prepare_default_calendar_encoded_database(
     vec![],
     DatabaseLayout::Calendar,
     Some(layout_setting.into()),
+    vec![],
+  )
+  .await
+}
+
+async fn prepare_default_timeline_encoded_database(
+  view_id: &Uuid,
+  database_id: &Uuid,
+  name: &str,
+) -> Result<EncodedDatabase, AppError> {
+  let text_field = Field::from_field_type("Title", FieldType::RichText, true);
+  let date_field = Field::from_field_type("Date", FieldType::DateTime, false);
+  let date_field_id = date_field.id.clone();
+  let multi_select_field = Field::from_field_type("Tags", FieldType::MultiSelect, false);
+  let fields = vec![text_field, date_field, multi_select_field];
+  let layout_setting = TimelineLayoutSetting::new(date_field_id);
+
+  prepare_new_encoded_database(
+    view_id,
+    database_id,
+    name,
+    fields,
+    vec![],
+    DatabaseLayout::Timeline,
+    Some(layout_setting.into()),
+    vec![],
+  )
+  .await
+}
+
+/// Same fields and rows as the default grid, shown with another layout. The client fills
+/// the layout settings it needs (cover field, chart type...) on first open.
+async fn prepare_default_grid_like_encoded_database(
+  view_id: &Uuid,
+  database_id: &Uuid,
+  name: &str,
+  database_layout: DatabaseLayout,
+) -> Result<EncodedDatabase, AppError> {
+  let text_field = Field::from_field_type("Name", FieldType::RichText, true);
+  let single_select_field = Field::from_field_type("Type", FieldType::SingleSelect, false);
+  let checkbox_field = Field::from_field_type("Done", FieldType::Checkbox, false);
+  let fields = vec![text_field, single_select_field, checkbox_field];
+  let rows = (0..3)
+    .map(|_| CreateRowParams::new(gen_row_id(), database_id.to_string()))
+    .collect();
+
+  prepare_new_encoded_database(
+    view_id,
+    database_id,
+    name,
+    fields,
+    rows,
+    database_layout,
+    None,
     vec![],
   )
   .await
@@ -1197,6 +1267,43 @@ async fn create_calendar_page(
   .await
 }
 
+/// Creates a database page for the layouts added after Grid/Board/Calendar.
+async fn create_database_layout_page(
+  state: &AppState,
+  user: RealtimeUser,
+  workspace_id: Uuid,
+  parent_view_id: &Uuid,
+  view_layout: collab_folder::ViewLayout,
+  name: Option<&str>,
+) -> Result<Page, AppError> {
+  let database_layout = to_database_layout(&view_layout).ok_or_else(|| {
+    AppError::InvalidRequest(format!("{:?} is not a database layout", view_layout))
+  })?;
+  let view_id = Uuid::new_v4();
+  let database_id = Uuid::new_v4();
+  let name_str = name.unwrap_or_default();
+  let encoded_database = match database_layout {
+    DatabaseLayout::Timeline => {
+      prepare_default_timeline_encoded_database(&view_id, &database_id, name_str).await?
+    },
+    _ => {
+      prepare_default_grid_like_encoded_database(&view_id, &database_id, name_str, database_layout)
+        .await?
+    },
+  };
+  create_database_page(
+    state,
+    user,
+    workspace_id,
+    parent_view_id,
+    &view_id,
+    view_layout,
+    name,
+    &encoded_database,
+  )
+  .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn create_database_page(
   state: &AppState,
@@ -1707,7 +1814,13 @@ pub async fn publish_page(
     },
     collab_folder::ViewLayout::Grid
     | collab_folder::ViewLayout::Board
-    | collab_folder::ViewLayout::Calendar => {
+    | collab_folder::ViewLayout::Calendar
+    | collab_folder::ViewLayout::Chart
+    | collab_folder::ViewLayout::List
+    | collab_folder::ViewLayout::Gallery
+    | collab_folder::ViewLayout::Feed
+    | collab_folder::ViewLayout::Form
+    | collab_folder::ViewLayout::Timeline => {
       generate_publish_data_for_database(
         &state.pg_pool,
         &state.collab_storage,
@@ -1989,7 +2102,13 @@ async fn get_page_view_collab_for_view_with_parent(
     },
     collab_folder::ViewLayout::Grid
     | collab_folder::ViewLayout::Board
-    | collab_folder::ViewLayout::Calendar => {
+    | collab_folder::ViewLayout::Calendar
+    | collab_folder::ViewLayout::Chart
+    | collab_folder::ViewLayout::List
+    | collab_folder::ViewLayout::Gallery
+    | collab_folder::ViewLayout::Feed
+    | collab_folder::ViewLayout::Form
+    | collab_folder::ViewLayout::Timeline => {
       get_page_collab_data_for_database(pg_pool, collab_storage, uid, workspace_id, view_id).await
     },
     collab_folder::ViewLayout::Chat => Err(AppError::InvalidRequest(
@@ -2160,16 +2279,12 @@ pub async fn create_database_view(
   view_layout: &ViewLayout,
   name: Option<&str>,
 ) -> Result<(), AppError> {
-  let database_layout = match view_layout {
-    ViewLayout::Grid => DatabaseLayout::Grid,
-    ViewLayout::Board => DatabaseLayout::Board,
-    ViewLayout::Calendar => DatabaseLayout::Calendar,
-    _ => {
-      return Err(AppError::InvalidRequest(
+  let database_layout = to_database_layout(&to_folder_view_layout(view_layout.clone()))
+    .ok_or_else(|| {
+      AppError::InvalidRequest(
         "The layout type is not supported for database view creation".to_string(),
-      ))
-    },
-  };
+      )
+    })?;
 
   let client_id = default_client_id();
   let timestamp = collab_database::database::timestamp();

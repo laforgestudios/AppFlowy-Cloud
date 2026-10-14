@@ -405,6 +405,12 @@ pub enum ViewLayout {
   Board = 2,
   Calendar = 3,
   Chat = 4,
+  Chart = 5,
+  List = 6,
+  Gallery = 7,
+  Feed = 8,
+  Form = 9,
+  Timeline = 10,
 }
 
 impl std::fmt::Display for ViewLayout {
@@ -415,6 +421,12 @@ impl std::fmt::Display for ViewLayout {
       ViewLayout::Board => "Board",
       ViewLayout::Calendar => "Calendar",
       ViewLayout::Chat => "Chat",
+      ViewLayout::Chart => "Chart",
+      ViewLayout::List => "List",
+      ViewLayout::Gallery => "Gallery",
+      ViewLayout::Feed => "Feed",
+      ViewLayout::Form => "Form",
+      ViewLayout::Timeline => "Timeline",
     };
     write!(f, "{}", s)
   }
@@ -553,4 +565,34 @@ pub struct UpsertDatatabaseRow {
   pub pre_hash: String, // input which will be hashed into database row id
   pub cells: HashMap<String, serde_json::Value>,
   pub document: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::ViewLayout;
+
+  #[test]
+  fn view_layout_accepts_web_layout_numbers() {
+    let layouts = [
+      ViewLayout::Document,
+      ViewLayout::Grid,
+      ViewLayout::Board,
+      ViewLayout::Calendar,
+      ViewLayout::Chat,
+      ViewLayout::Chart,
+      ViewLayout::List,
+      ViewLayout::Gallery,
+      ViewLayout::Feed,
+      ViewLayout::Form,
+      ViewLayout::Timeline,
+    ];
+    for (value, layout) in layouts.into_iter().enumerate() {
+      assert_eq!(serde_json::to_string(&layout).unwrap(), value.to_string());
+      assert_eq!(
+        serde_json::from_str::<ViewLayout>(&value.to_string()).unwrap(),
+        layout
+      );
+    }
+    assert!(serde_json::from_str::<ViewLayout>("11").is_err());
+  }
 }
