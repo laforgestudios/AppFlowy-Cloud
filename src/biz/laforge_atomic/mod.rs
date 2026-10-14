@@ -7,6 +7,7 @@
 //! - [folder]: Folder insertion and the read-your-writes check of the published Folder update.
 //! - [collab]: presence check and insertion of client-id collabs, readability check.
 //!
+//! The creation kinds built on top: [document] (default document page) and [row_document].
 //! [full_sync] is the batch full-sync used by the web to hydrate created objects.
 //!
 //! Ordering rule for every kind: collabs are committed first, then the Folder update is
@@ -16,7 +17,9 @@
 //! readable.
 
 pub mod collab;
+pub mod document;
 pub mod folder;
 pub mod full_sync;
 pub mod position;
 pub mod receipt;
+pub mod row_document;
