@@ -388,7 +388,15 @@ impl PublishCollabDuplicator {
           .await?;
         Ok(Some(new_doc_view))
       },
-      ViewLayout::Grid | ViewLayout::Board | ViewLayout::Calendar => {
+      ViewLayout::Grid
+      | ViewLayout::Board
+      | ViewLayout::Calendar
+      | ViewLayout::Chart
+      | ViewLayout::List
+      | ViewLayout::Gallery
+      | ViewLayout::Feed
+      | ViewLayout::Form
+      | ViewLayout::Timeline => {
         let pub_view_id: Uuid = metadata.view.view_id.parse()?;
         let db_payload = deserialize_publish_database_data(&published_blob)?;
         let new_db_view = self

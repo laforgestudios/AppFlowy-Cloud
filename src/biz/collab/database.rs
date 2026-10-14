@@ -16,7 +16,7 @@ use collab_database::{
   },
   views::{
     BoardLayoutSetting, CalendarLayoutSetting, DatabaseLayout, FieldSettingsByFieldIdMap, Group,
-    GroupSetting, GroupSettingMap, LayoutSettings,
+    GroupSetting, GroupSettingMap, LayoutSettings, TimelineLayoutSetting,
   },
 };
 use collab_entity::{CollabType, EncodedCollab};
@@ -38,16 +38,27 @@ pub fn resolve_dependencies_when_create_database_linked_view(
   fields: &[Field],
 ) -> Result<LinkedViewDependencies, AppError> {
   match database_layout {
-    DatabaseLayout::Grid => resolve_grid_dependencies(fields),
+    DatabaseLayout::Grid
+    | DatabaseLayout::Chart
+    | DatabaseLayout::List
+    | DatabaseLayout::Gallery
+    | DatabaseLayout::Feed
+    | DatabaseLayout::Form => resolve_grid_dependencies(fields, database_layout),
     DatabaseLayout::Board => resolve_board_dependencies(fields),
-    DatabaseLayout::Calendar => resolve_calendar_dependencies(fields),
+    DatabaseLayout::Calendar | DatabaseLayout::Timeline => {
+      resolve_date_dependencies(fields, database_layout)
+    },
   }
 }
 
-fn resolve_grid_dependencies(fields: &[Field]) -> Result<LinkedViewDependencies, AppError> {
+/// Layouts without required fields: the client fills its own layout settings.
+fn resolve_grid_dependencies(
+  fields: &[Field],
+  database_layout: DatabaseLayout,
+) -> Result<LinkedViewDependencies, AppError> {
   Ok(LinkedViewDependencies {
     layout_settings: LayoutSettings::default(),
-    field_settings: default_field_settings_for_fields(fields, DatabaseLayout::Grid),
+    field_settings: default_field_settings_for_fields(fields, database_layout),
     group_settings: vec![],
     deps_fields: vec![],
   })
@@ -123,8 +134,11 @@ fn single_select_type_option_ids_from_field(field: &Field) -> Result<Vec<String>
   }
 }
 
-fn resolve_calendar_dependencies(fields: &[Field]) -> Result<LinkedViewDependencies, AppError> {
-  let database_layout = DatabaseLayout::Calendar;
+/// Calendar and timeline views place rows on a date field, created if the database has none.
+fn resolve_date_dependencies(
+  fields: &[Field],
+  database_layout: DatabaseLayout,
+) -> Result<LinkedViewDependencies, AppError> {
   let (date_time_field, all_fields, deps_fields) = match fields
     .iter()
     .find(|f| FieldType::from(f.field_type) == FieldType::DateTime)
@@ -142,7 +156,10 @@ fn resolve_calendar_dependencies(fields: &[Field]) -> Result<LinkedViewDependenc
   };
   let field_settings = default_field_settings_for_fields(&all_fields, database_layout);
   let mut layout_settings = LayoutSettings::default();
-  let layout_setting = CalendarLayoutSetting::new(date_time_field.id.clone()).into();
+  let layout_setting = match database_layout {
+    DatabaseLayout::Timeline => TimelineLayoutSetting::new(date_time_field.id.clone()).into(),
+    _ => CalendarLayoutSetting::new(date_time_field.id.clone()).into(),
+  };
   layout_settings.insert(database_layout, layout_setting);
   Ok(LinkedViewDependencies {
     layout_settings,
@@ -352,5 +369,58 @@ mod tests {
       .to_owned();
     let calendar_layout_setting = CalendarLayoutSetting::from(layout_setting);
     assert_eq!(calendar_layout_setting.field_id, date_field.id);
+  }
+
+  #[test]
+  fn test_resolve_dependencies_when_create_database_linked_view_timeline() {
+    let database_layout = DatabaseLayout::Timeline;
+    let fields: Vec<Field> = vec![];
+    let dependencies =
+      resolve_dependencies_when_create_database_linked_view(database_layout, &fields).unwrap();
+    assert_eq!(dependencies.deps_fields.len(), 1);
+    assert_eq!(
+      dependencies.deps_fields[0].field_type,
+      FieldType::DateTime as i64
+    );
+    let date_field = Field::from_field_type("datetime", FieldType::DateTime, false);
+    let fields: Vec<Field> = vec![
+      Field::from_field_type("title", FieldType::RichText, true),
+      date_field.clone(),
+    ];
+    let dependencies =
+      resolve_dependencies_when_create_database_linked_view(database_layout, &fields).unwrap();
+    assert!(dependencies.deps_fields.is_empty());
+    assert!(!dependencies
+      .layout_settings
+      .contains_key(&DatabaseLayout::Calendar));
+    let layout_setting: LayoutSetting = dependencies
+      .layout_settings
+      .get(&DatabaseLayout::Timeline)
+      .unwrap()
+      .to_owned();
+    let timeline_layout_setting = TimelineLayoutSetting::from(layout_setting);
+    assert_eq!(timeline_layout_setting.field_id, date_field.id);
+  }
+
+  #[test]
+  fn test_resolve_dependencies_when_create_database_linked_view_grid_like() {
+    let fields: Vec<Field> = vec![
+      Field::from_field_type("name", FieldType::RichText, true),
+      Field::from_field_type("description", FieldType::RichText, false),
+    ];
+    for database_layout in [
+      DatabaseLayout::Chart,
+      DatabaseLayout::List,
+      DatabaseLayout::Gallery,
+      DatabaseLayout::Feed,
+      DatabaseLayout::Form,
+    ] {
+      let dependencies =
+        resolve_dependencies_when_create_database_linked_view(database_layout, &fields).unwrap();
+      assert!(dependencies.deps_fields.is_empty());
+      assert!(dependencies.group_settings.is_empty());
+      assert!(dependencies.layout_settings.is_empty());
+      assert_eq!(dependencies.field_settings.len(), fields.len());
+    }
   }
 }
