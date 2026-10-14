@@ -1821,13 +1821,15 @@ pub async fn publish_page(
     | collab_folder::ViewLayout::Feed
     | collab_folder::ViewLayout::Form
     | collab_folder::ViewLayout::Timeline => {
+      let target = published_database_target(&folder, &view, uid);
       generate_publish_data_for_database(
         &state.pg_pool,
         &state.collab_storage,
         uid,
         workspace_id,
         view_id,
-        visible_database_view_ids,
+        target.database_id,
+        visible_database_view_ids.or(target.container_view_ids),
       )
       .await
     },
@@ -1875,31 +1877,82 @@ async fn generate_publish_data_for_document(
   Ok(collab.doc_state.to_vec())
 }
 
+/// The database a published database view shows, as the current web stores it in the Folder.
+#[derive(Debug, Default, PartialEq)]
+pub struct PublishedDatabaseTarget {
+  /// `extra.database_id` of the view; `None` for legacy views, found through the
+  /// WorkspaceDatabase instead.
+  pub database_id: Option<Uuid>,
+  /// For a database container (`extra.is_database_container`), its database view children in
+  /// Folder order: the views published by default.
+  pub container_view_ids: Option<Vec<Uuid>>,
+}
+
+pub fn published_database_target(
+  folder: &Folder,
+  view: &View,
+  uid: i64,
+) -> PublishedDatabaseTarget {
+  let extra = view
+    .extra
+    .as_deref()
+    .map(parse_extra_field_as_json)
+    .unwrap_or_default();
+  let database_id = extra
+    .get("database_id")
+    .and_then(|id| id.as_str())
+    .and_then(|id| Uuid::parse_str(id).ok());
+  let is_container = extra
+    .get("is_database_container")
+    .and_then(|value| value.as_bool())
+    .unwrap_or(false);
+  let container_view_ids = (is_container && database_id.is_some())
+    .then(|| {
+      view
+        .children
+        .iter()
+        .filter_map(|child| folder.get_view(&child.id, uid))
+        .filter(|child| to_database_layout(&child.layout).is_some())
+        .filter_map(|child| Uuid::parse_str(&child.id).ok())
+        .collect::<Vec<_>>()
+    })
+    .filter(|children| !children.is_empty());
+  PublishedDatabaseTarget {
+    database_id,
+    container_view_ids,
+  }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn generate_publish_data_for_database(
   pg_pool: &PgPool,
   collab_storage: &Arc<dyn CollabStore>,
   uid: i64,
   workspace_id: Uuid,
   view_id: Uuid,
+  database_id: Option<Uuid>,
   visible_database_view_ids: Option<Vec<Uuid>>,
 ) -> Result<Vec<u8>, AppError> {
-  let (_, ws_db) = get_latest_workspace_database(
-    collab_storage,
-    pg_pool,
-    GetCollabOrigin::User { uid },
-    workspace_id,
-  )
-  .await?;
-  let db_oid = {
-    ws_db
-      .get_database_meta_with_view_id(&view_id.to_string())
-      .ok_or(AppError::NoRequiredData(format!(
-        "Database view {} not found",
-        view_id
-      )))?
-      .database_id
+  let db_oid = match database_id {
+    Some(database_id) => database_id,
+    None => {
+      let (_, ws_db) = get_latest_workspace_database(
+        collab_storage,
+        pg_pool,
+        GetCollabOrigin::User { uid },
+        workspace_id,
+      )
+      .await?;
+      let db_oid = ws_db
+        .get_database_meta_with_view_id(&view_id.to_string())
+        .ok_or(AppError::NoRequiredData(format!(
+          "Database view {} not found",
+          view_id
+        )))?
+        .database_id;
+      Uuid::parse_str(&db_oid)?
+    },
   };
-  let db_oid = Uuid::parse_str(&db_oid)?;
   let (db_collab, db_body) =
     get_latest_collab_database_body(collab_storage, workspace_id, db_oid).await?;
   let inline_view_id = {
@@ -2630,4 +2683,105 @@ async fn get_all_user_uuids_with_guest_access_to_page(
 ) -> Result<Vec<Uuid>, AppError> {
   // Note: the open source version of AppFlowy Cloud does not support guest access, hence this will always return empty.
   Ok(vec![])
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use collab_folder::{FolderData, ViewLayout as FolderViewLayout, Workspace};
+
+  const UID: i64 = 1;
+
+  fn view(id: &Uuid, parent: &Uuid, layout: FolderViewLayout, extra: Option<String>) -> View {
+    let mut view = View::new(
+      id.to_string(),
+      parent.to_string(),
+      "view".to_string(),
+      layout,
+      Some(UID),
+    );
+    view.extra = extra;
+    view
+  }
+
+  #[test]
+  fn publish_resolves_containers_from_the_folder() {
+    let workspace_id = Uuid::new_v4();
+    let database_id = Uuid::new_v4();
+    let container_id = Uuid::new_v4();
+    let (grid_id, form_id, responses_id, document_id) = (
+      Uuid::new_v4(),
+      Uuid::new_v4(),
+      Uuid::new_v4(),
+      Uuid::new_v4(),
+    );
+    let legacy_id = Uuid::new_v4();
+    let child_extra = Some(json!({ "database_id": database_id }).to_string());
+    let mut data = FolderData::new(
+      UID,
+      Workspace::new(workspace_id.to_string(), "ws".to_string(), UID),
+    );
+    data.views = vec![
+      view(
+        &container_id,
+        &workspace_id,
+        FolderViewLayout::Grid,
+        Some(
+          json!({ "database_id": database_id, "is_database_container": true, "embedded": false })
+            .to_string(),
+        ),
+      ),
+      view(
+        &grid_id,
+        &container_id,
+        FolderViewLayout::Grid,
+        child_extra.clone(),
+      ),
+      view(
+        &form_id,
+        &container_id,
+        FolderViewLayout::Form,
+        child_extra.clone(),
+      ),
+      view(
+        &responses_id,
+        &container_id,
+        FolderViewLayout::Grid,
+        child_extra.clone(),
+      ),
+      view(
+        &document_id,
+        &container_id,
+        FolderViewLayout::Document,
+        None,
+      ),
+      view(&legacy_id, &workspace_id, FolderViewLayout::Grid, None),
+    ];
+    let collab = Collab::new_with_options(
+      CollabOrigin::Empty,
+      CollabOptions::new(workspace_id.to_string(), default_client_id()),
+    )
+    .unwrap();
+    let folder = Folder::create(collab, None, data);
+    let target = |id: &Uuid| {
+      let view = folder.get_view(&id.to_string(), UID).unwrap();
+      published_database_target(&folder, &view, UID)
+    };
+
+    assert_eq!(
+      target(&container_id),
+      PublishedDatabaseTarget {
+        database_id: Some(database_id),
+        container_view_ids: Some(vec![grid_id, form_id, responses_id]),
+      }
+    );
+    assert_eq!(
+      target(&form_id),
+      PublishedDatabaseTarget {
+        database_id: Some(database_id),
+        container_view_ids: None,
+      }
+    );
+    assert_eq!(target(&legacy_id), PublishedDatabaseTarget::default());
+  }
 }
